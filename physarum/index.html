@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#06070b">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Cdefs%3E%3ClinearGradient id=%27g%27 x1=%270%27 y1=%270%27 x2=%271%27 y2=%271%27%3E%3Cstop offset=%270%27 stop-color=%27%237dd3fc%27/%3E%3Cstop offset=%271%27 stop-color=%27%23f0abfc%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx=%2732%27 cy=%2732%27 r=%2728%27 fill=%27url(%23g)%27/%3E%3C/svg%3E">
+<title>Physarum — WebGL2 粘菌シミュレーション</title>
+<meta name="description" content="100万体のエージェントが GPU 上で粘菌（Physarum）のように振る舞い、脈打つネットワークを描くシミュレーション。">
+<style>
+  :root {
+    --bg: #06070b;
+    --panel: rgba(14, 16, 24, 0.55);
+    --panel-border: rgba(255, 255, 255, 0.12);
+    --text: #e9ecf4;
+    --muted: rgba(233, 236, 244, 0.6);
+    --accent: #7dd3fc;
+    --accent-2: #f0abfc;
+    --track: rgba(255, 255, 255, 0.14);
+    --radius: 16px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); overflow: hidden; }
+  canvas#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+  .hidden { display: none !important; }
+
+  .panel {
+    position: fixed; top: 16px; left: 16px; z-index: 10;
+    width: min(320px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px); overflow-y: auto; overscroll-behavior: contain;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    box-shadow: 0 10px 40px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06);
+    font-size: 13px; line-height: 1.4;
+    user-select: none;
+    transition: opacity .25s ease, transform .25s ease;
+  }
+  .panel header { display: flex; align-items: center; gap: 10px; padding: 12px 12px 10px 16px; }
+  .panel h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: 0.01em; }
+  .panel .jp { display: block; color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+  .panel header .titles { flex: 1; min-width: 0; }
+  .iconbtn {
+    appearance: none; border: 1px solid var(--panel-border); background: rgba(255,255,255,0.05); color: var(--text);
+    width: 30px; height: 30px; border-radius: 9px; cursor: pointer; font-size: 15px; line-height: 1; flex: none;
+  }
+  .iconbtn:hover { background: rgba(255,255,255,0.12); }
+  .panel .body { padding: 4px 16px 14px; border-top: 1px solid var(--panel-border); }
+  .panel.collapsed .body { display: none; }
+  .selects { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .selects label { display: block; color: var(--muted); font-size: 11.5px; margin-bottom: 3px; }
+  .selects .wide { grid-column: 1 / -1; }
+  select {
+    width: 100%; appearance: none; -webkit-appearance: none; font: inherit; font-size: 12.5px; color: var(--text);
+    background: rgba(255,255,255,0.06) url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2710%27 height=%276%27%3E%3Cpath d=%27M1 1l4 4 4-4%27 fill=%27none%27 stroke=%27%23e9ecf4%27 stroke-width=%271.5%27/%3E%3C/svg%3E") no-repeat right 10px center;
+    border: 1px solid var(--panel-border); border-radius: 10px; padding: 6px 26px 6px 10px; cursor: pointer;
+  }
+  select:hover { background-color: rgba(255,255,255,0.12); }
+  select option { background: #14171f; color: var(--text); }
+  .row { display: grid; grid-template-columns: 1fr 44px; align-items: center; gap: 8px; margin-top: 8px; }
+  .row label { display: block; color: var(--muted); font-size: 11.5px; margin-bottom: 3px; }
+  .row output { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); font-size: 12px; }
+  input[type=range] { width: 100%; height: 22px; margin: 0; background: transparent; appearance: none; -webkit-appearance: none; cursor: pointer; }
+  input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: var(--track); }
+  input[type=range]::-moz-range-track { height: 4px; border-radius: 4px; background: var(--track); }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 0 0 3px rgba(125,211,252,0.15); }
+  input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  input[type=range]:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+  .toggles { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 14px; }
+  .toggles label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text); }
+  .toggles input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+  .toggles kbd { margin-left: 2px; }
+
+  .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 12px; }
+  .btn {
+    appearance: none; border: 1px solid var(--panel-border); background: rgba(255,255,255,0.06); color: var(--text);
+    padding: 7px 10px; border-radius: 10px; cursor: pointer; font: inherit; font-size: 12.5px;
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  }
+  .btn:hover { background: rgba(255,255,255,0.13); }
+  .btn:focus-visible, .iconbtn:focus-visible, .toggles input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  kbd { font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); border: 1px solid var(--panel-border); border-radius: 5px; padding: 1px 5px; background: rgba(0,0,0,0.25); }
+  .hint { margin-top: 12px; color: var(--muted); font-size: 11.5px; display: flex; justify-content: space-between; gap: 8px; }
+  .hint b { color: var(--text); font-weight: 600; }
+  .ramp { display: inline-block; width: 64px; height: 10px; border-radius: 3px; border: 1px solid var(--panel-border); vertical-align: middle; }
+
+  #fps {
+    position: fixed; top: 16px; right: 16px; z-index: 10;
+    padding: 6px 10px; border-radius: 10px; font-size: 12px; font-variant-numeric: tabular-nums;
+    background: var(--panel); border: 1px solid var(--panel-border); color: var(--muted);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  }
+  #fps b { color: var(--text); font-weight: 600; }
+  #toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(10px); z-index: 10;
+    padding: 8px 14px; border-radius: 999px; font-size: 12.5px; color: var(--text);
+    background: var(--panel); border: 1px solid var(--panel-border); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    opacity: 0; transition: opacity .25s ease, transform .25s ease; pointer-events: none; white-space: nowrap;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #fallback {
+    position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; z-index: 20;
+    background: radial-gradient(ellipse at center, #141a2b 0%, var(--bg) 70%);
+  }
+  #fallback .card { max-width: 480px; padding: 28px 30px; background: var(--panel); border: 1px solid var(--panel-border); border-radius: var(--radius); }
+  #fallback h2 { margin: 0 0 10px; font-size: 18px; }
+  #fallback p { margin: 6px 0; color: var(--muted); font-size: 14px; }
+  @media (max-width: 600px) {
+    .panel { top: 10px; left: 10px; width: calc(100vw - 20px); max-height: calc(100vh - 20px); }
+    #fps { top: auto; bottom: 12px; right: 12px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .panel, #toast { transition: none; } }
+</style>
+</head>
+<body>
+<canvas id="gl" aria-label="Physarum simulation canvas. Press and hold to attract the agents."></canvas>
+
+<aside id="ui" class="panel" aria-label="Controls">
+  <header>
+    <div class="titles">
+      <h1>Physarum</h1>
+      <span class="jp">粘菌シミュレーション — 押しながら動かすと餌に集まる</span>
+    </div>
+    <button class="iconbtn" id="collapse" aria-label="Collapse panel" title="Collapse">–</button>
+  </header>
+  <div class="body">
+    <div class="selects">
+      <div><label for="sel-preset">Preset <kbd>N</kbd></label><select id="sel-preset"></select></div>
+      <div><label for="sel-palette">Palette <kbd>P</kbd></label><select id="sel-palette"></select></div>
+      <div class="wide"><label for="sel-agents">Agents</label><select id="sel-agents">
+        <option value="250000">250k</option><option value="500000">500k</option><option value="1000000">1M</option>
+      </select></div>
+    </div>
+    <div class="row"><div><label for="s-sa">Sensor angle (deg)</label><input id="s-sa" type="range" min="2" max="120" step="0.5" data-key="sensorAngle"></div><output for="s-sa"></output></div>
+    <div class="row"><div><label for="s-sd">Sensor distance (px)</label><input id="s-sd" type="range" min="1" max="60" step="0.5" data-key="sensorDist"></div><output for="s-sd"></output></div>
+    <div class="row"><div><label for="s-ta">Turn angle (deg)</label><input id="s-ta" type="range" min="1" max="120" step="0.5" data-key="turnAngle"></div><output for="s-ta"></output></div>
+    <div class="row"><div><label for="s-st">Step size (px)</label><input id="s-st" type="range" min="0.2" max="4" step="0.05" data-key="stepSize"></div><output for="s-st"></output></div>
+    <div class="row"><div><label for="s-dep">Deposit</label><input id="s-dep" type="range" min="0.005" max="0.3" step="0.005" data-key="deposit"></div><output for="s-dep"></output></div>
+    <div class="row"><div><label for="s-dec">Decay</label><input id="s-dec" type="range" min="0.005" max="0.3" step="0.005" data-key="decay"></div><output for="s-dec"></output></div>
+    <div class="row"><div><label for="s-dif">Diffuse strength</label><input id="s-dif" type="range" min="0" max="1" step="0.01" data-key="diffuse"></div><output for="s-dif"></output></div>
+    <div class="row"><div><label for="s-exp">Brightness</label><input id="s-exp" type="range" min="0.05" max="3" step="0.05" data-key="exposure"></div><output for="s-exp"></output></div>
+    <div class="toggles">
+      <label><input type="checkbox" id="chk-paused"> Paused <kbd>Esc</kbd></label>
+    </div>
+    <div class="buttons">
+      <button class="btn" data-action="scatter">Scatter <kbd>Space</kbd></button>
+      <button class="btn" data-action="clear">Clear trail <kbd>C</kbd></button>
+      <button class="btn" data-action="screenshot">Screenshot <kbd>S</kbd></button>
+      <button class="btn" data-action="palette">Palette <kbd>P</kbd></button>
+      <button class="btn" data-action="hide" style="grid-column: 1 / -1">Hide UI <kbd>H</kbd></button>
+    </div>
+    <div class="hint"><span>Palette: <b id="palette-name"></b> <i class="ramp" id="ramp"></i></span><span>Next seed: <b id="seed-name"></b></span></div>
+  </div>
+</aside>
+<div id="fps" aria-live="off"><b>--</b> fps</div>
+<div id="toast" role="status"></div>
+<div id="fallback" class="hidden"><div class="card"><h2>WebGL2 が利用できません</h2><p id="fallback-msg"></p><p>This demo needs WebGL2 with renderable float textures. Try a recent Chrome, Firefox, Edge or Safari with hardware acceleration enabled.</p></div></div>
+
+<script>
+'use strict';
+(function () {
+  // ---------------------------------------------------------------------------
+  // Parameters, presets, palettes
+  // ---------------------------------------------------------------------------
+  const PRESETS = [
+    { name: 'Nervous system', sensorAngle: 22.5, sensorDist: 9,  turnAngle: 45, stepSize: 1.0,  deposit: 0.06, decay: 0.05,  diffuse: 0.6,  exposure: 0.9 },
+    { name: 'Coral',          sensorAngle: 45,   sensorDist: 20, turnAngle: 15, stepSize: 1.2,  deposit: 0.08, decay: 0.02,  diffuse: 0.9,  exposure: 0.35 },
+    { name: 'Galaxy',         sensorAngle: 30,   sensorDist: 40, turnAngle: 8,  stepSize: 2.0,  deposit: 0.03, decay: 0.03,  diffuse: 0.5,  exposure: 0.9 },
+    { name: 'Cells',          sensorAngle: 90,   sensorDist: 6,  turnAngle: 90, stepSize: 0.7,  deposit: 0.1,  decay: 0.08,  diffuse: 1.0,  exposure: 0.8 },
+    { name: 'Web',            sensorAngle: 12,   sensorDist: 30, turnAngle: 60, stepSize: 1.5,  deposit: 0.04, decay: 0.04,  diffuse: 0.3,  exposure: 1.0 },
+  ];
+  const PALETTES = [
+    { name: 'Bioluminescent', stops: ['#03050f', '#06285a', '#0aa3a0', '#7dfbd8', '#f2fff9'] },
+    { name: 'Ember',          stops: ['#050203', '#4a0a12', '#c8320f', '#ffa62b', '#fff5c8'] },
+    { name: 'Ice',            stops: ['#030612', '#1a2f7a', '#3f8fd8', '#b6e6ff', '#ffffff'] },
+    { name: 'Neon',           stops: ['#060310', '#3b0a7a', '#c81cb8', '#ff5ac0', '#fff9a8'] },
+    { name: 'Mono',           stops: ['#050505', '#2b2b30', '#6f7078', '#c4c5cc', '#ffffff'] },
+  ];
+  const AGENT_OPTIONS = [250000, 500000, 1000000];
+  const SEEDS = ['Random', 'Ring', 'Center'];
+  const TRAIL_MAX_SIZE = 1600;
+
+  const params = Object.assign({}, PRESETS[0]);
+  delete params.name;
+  let presetIndex = 0;
+  let paletteIndex = 0;
+  let paused = false;
+  let agentCount = 1000000;
+  let seedIndex = 0;             // next seed pattern used by Scatter
+  let attractor = { active: false, x: 0.5, y: 0.5 };
+  let frame = 0;
+
+  // Optional URL override, e.g. ?agents=250000 (useful for low-end / software GL).
+  try {
+    const q = new URLSearchParams(location.search).get('agents');
+    if (q) {
+      const n = parseFloat(q) * (/k$/i.test(q) ? 1e3 : /m$/i.test(q) ? 1e6 : 1);
+      if (n > 0) agentCount = AGENT_OPTIONS.reduce((a, b) => Math.abs(b - n) < Math.abs(a - n) ? b : a);
+    }
+  } catch (e) { /* ignore */ }
+
+  const canvas = document.getElementById('gl');
+  const ui = document.getElementById('ui');
+  const fpsEl = document.getElementById('fps');
+  const toastEl = document.getElementById('toast');
+
+  // ---------------------------------------------------------------------------
+  // WebGL2 setup
+  // ---------------------------------------------------------------------------
+  function fail(msg) {
+    document.getElementById('fallback-msg').textContent = msg;
+    document.getElementById('fallback').classList.remove('hidden');
+    ui.classList.add('hidden');
+    fpsEl.classList.add('hidden');
+  }
+
+  const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+  if (!gl) { fail('このブラウザでは WebGL2 が有効になっていないようです。'); return; }
+  const extFloat = gl.getExtension('EXT_color_buffer_float');
+  const extHalf = extFloat ? null : gl.getExtension('EXT_color_buffer_half_float');
+  if (!extFloat && !extHalf) { fail('浮動小数点テクスチャへの描き込み (EXT_color_buffer_float) に対応していません。'); return; }
+
+  // Agents: RGBA32F (x, y, heading, per-agent speed). Falls back to half float if 32F is not renderable.
+  const AGENT_FMT = extFloat ? { internal: gl.RGBA32F, format: gl.RGBA, type: gl.FLOAT }
+                             : { internal: gl.RGBA16F, format: gl.RGBA, type: gl.HALF_FLOAT };
+  // Trail: half float so that additive blending works without EXT_float_blend. R16F needs EXT_color_buffer_float.
+  const TRAIL_FMT = extFloat ? { internal: gl.R16F,    format: gl.RED,  type: gl.HALF_FLOAT }
+                             : { internal: gl.RGBA16F, format: gl.RGBA, type: gl.HALF_FLOAT };
+  const MAX_TEX = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+
+  // ---------------------------------------------------------------------------
+  // Shaders
+  // ---------------------------------------------------------------------------
+  const VS_FULL = `#version 300 es
+    out vec2 v_uv;
+    void main() {
+      vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+      v_uv = p;
+      gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+    }`;
+
+  const HASH = `
+    uvec3 pcg3d(uvec3 v) {
+      v = v * 1664525u + 1013904223u;
+      v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+      v ^= v >> 16u;
+      v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+      return v;
+    }
+    vec3 rand3(uvec3 v) { return vec3(pcg3d(v)) * (1.0 / 4294967295.0); }`;
+
+  const FS_SEED = `#version 300 es
+    precision highp float;
+    uniform uint u_seed; uniform int u_mode; uniform float u_aspect;
+    out vec4 o;
+    ${HASH}
+    const float TAU = 6.283185307179586;
+    void main() {
+      vec3 r = rand3(uvec3(gl_FragCoord.xy, u_seed));
+      vec3 r2 = rand3(uvec3(gl_FragCoord.xy, u_seed + 7919u));
+      vec2 pos; float h;
+      // Circle in screen space, radius relative to the shorter side.
+      vec2 circ = vec2(1.0 / u_aspect, 1.0) * min(u_aspect, 1.0);
+      if (u_mode == 1) {            // ring, heading straight inward
+        float a = r.x * TAU; float rad = 0.40 + (r.y - 0.5) * 0.01;
+        pos = 0.5 + vec2(cos(a), sin(a)) * rad * circ;
+        h = a + 3.14159265;
+      } else if (u_mode == 2) {     // center blob, heading outward
+        float a = r.x * TAU; float rad = sqrt(r.y) * 0.03;
+        pos = 0.5 + vec2(cos(a), sin(a)) * rad * circ;
+        h = a + (r.z - 0.5) * 0.8;
+      } else {                      // uniform random
+        pos = r.xy; h = r.z * TAU;
+      }
+      o = vec4(pos, h, r2.x);
+    }`;
+
+  const FS_UPDATE = `#version 300 es
+    precision highp float;
+    uniform sampler2D u_agents, u_trail;
+    uniform vec2 u_trailSize;
+    uniform float u_sa, u_sd, u_ta, u_step, u_aspect;
+    uniform vec3 u_attr;    // uv.x, uv.y, strength (0 = off)
+    uniform uint u_frame;
+    out vec4 o;
+    ${HASH}
+    const float TAU = 6.283185307179586;
+    // Food source under the pointer: a smell that falls off with distance.
+    float food(vec2 p) {
+      if (u_attr.z <= 0.0) return 0.0;
+      vec2 d = (p - u_attr.xy) * vec2(u_aspect, 1.0);
+      return u_attr.z / (1.0 + dot(d, d) * 400.0);
+    }
+    float sense(vec2 p) { return texture(u_trail, fract(p)).r + food(p); }
+    void main() {
+      vec4 a = texelFetch(u_agents, ivec2(gl_FragCoord.xy), 0);
+      vec2 pos = a.xy; float h = a.z;
+      vec3 r = rand3(uvec3(gl_FragCoord.xy, u_frame));
+      vec2 inv = 1.0 / u_trailSize;
+      float F = sense(pos + vec2(cos(h), sin(h)) * u_sd * inv);
+      float L = sense(pos + vec2(cos(h + u_sa), sin(h + u_sa)) * u_sd * inv);
+      float R = sense(pos + vec2(cos(h - u_sa), sin(h - u_sa)) * u_sd * inv);
+      if (F > L && F > R) { /* keep heading */ }
+      else if (F < L && F < R) { h += (r.x < 0.5 ? -u_ta : u_ta); }
+      else if (L > R) { h += u_ta; }
+      else if (R > L) { h -= u_ta; }
+      h += (r.y - 0.5) * 0.12;                      // small random wobble
+      if (u_attr.z > 0.0) {                         // gentle pull toward the food source
+        vec2 d = (u_attr.xy - pos) * vec2(u_aspect, 1.0);
+        float dist2 = dot(d, d);
+        float w = 0.1 / (1.0 + dist2 * 40.0);
+        float delta = atan(d.y, d.x) - h;
+        delta = mod(delta + 3.14159265, TAU) - 3.14159265;
+        h += delta * w;
+      }
+      h = mod(h, TAU);
+      float speed = u_step * (0.75 + 0.5 * a.w);    // per-agent speed variation
+      pos = fract(pos + vec2(cos(h), sin(h)) * speed * inv);
+      o = vec4(pos, h, a.w);
+    }`;
+
+  const VS_DEPOSIT = `#version 300 es
+    uniform sampler2D u_agents; uniform int u_texW;
+    void main() {
+      ivec2 tc = ivec2(gl_VertexID % u_texW, gl_VertexID / u_texW);
+      vec4 a = texelFetch(u_agents, tc, 0);
+      gl_Position = vec4(a.xy * 2.0 - 1.0, 0.0, 1.0);
+      gl_PointSize = 1.0;
+    }`;
+  const FS_DEPOSIT = `#version 300 es
+    precision highp float;
+    uniform float u_deposit;
+    out vec4 o;
+    void main() { o = vec4(u_deposit, 0.0, 0.0, 1.0); }`;
+
+  const FS_DIFFUSE = `#version 300 es
+    precision highp float;
+    uniform sampler2D u_trail; uniform vec2 u_texel; uniform float u_diffuse, u_decay;
+    in vec2 v_uv; out vec4 o;
+    void main() {
+      float c = texture(u_trail, v_uv).r;
+      float s = 0.0;
+      for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) s += texture(u_trail, v_uv + vec2(i, j) * u_texel).r;
+      float v = mix(c, s / 9.0, u_diffuse) * (1.0 - u_decay);
+      o = vec4(min(v, 4096.0), 0.0, 0.0, 1.0);
+    }`;
+
+  const FS_GLOW_DOWN = `#version 300 es
+    precision highp float;
+    uniform sampler2D u_trail; uniform vec2 u_texel; uniform float u_exposure;
+    in vec2 v_uv; out vec4 o;
+    void main() {
+      float s = 0.0;
+      s += texture(u_trail, v_uv + vec2(-1.0, -1.0) * u_texel).r;
+      s += texture(u_trail, v_uv + vec2( 1.0, -1.0) * u_texel).r;
+      s += texture(u_trail, v_uv + vec2(-1.0,  1.0) * u_texel).r;
+      s += texture(u_trail, v_uv + vec2( 1.0,  1.0) * u_texel).r;
+      float d = 1.0 - exp(-s * 0.25 * u_exposure);
+      o = vec4(d * d, 0.0, 0.0, 1.0);
+    }`;
+  const FS_BLUR = `#version 300 es
+    precision highp float;
+    uniform sampler2D u_tex; uniform vec2 u_dir;
+    in vec2 v_uv; out vec4 o;
+    void main() {
+      float s = texture(u_tex, v_uv).r * 0.2270270270;
+      s += texture(u_tex, v_uv + u_dir * 1.3846153846).r * 0.3162162162;
+      s += texture(u_tex, v_uv - u_dir * 1.3846153846).r * 0.3162162162;
+      s += texture(u_tex, v_uv + u_dir * 3.2307692308).r * 0.0702702703;
+      s += texture(u_tex, v_uv - u_dir * 3.2307692308).r * 0.0702702703;
+      o = vec4(s, 0.0, 0.0, 1.0);
+    }`;
+
+  const FS_DISPLAY = `#version 300 es
+    precision highp float;
+    uniform sampler2D u_trail, u_glow;
+    uniform vec3 u_ramp[5];
+    uniform float u_exposure, u_glowAmount, u_vignette;
+    in vec2 v_uv; out vec4 o;
+    vec3 ramp(float t) {
+      t = clamp(t, 0.0, 1.0) * 4.0;
+      int i = int(min(floor(t), 3.0));
+      return mix(u_ramp[i], u_ramp[i + 1], t - float(i));
+    }
+    void main() {
+      float tr = texture(u_trail, v_uv).r;
+      float d = 1.0 - exp(-tr * u_exposure);
+      float g = texture(u_glow, v_uv).r;
+      vec3 col = ramp(d * 0.92 + g * 0.08);
+      col += ramp(0.7) * g * u_glowAmount;
+      vec2 q = v_uv - 0.5;
+      col *= 1.0 - u_vignette * smoothstep(0.35, 0.95, dot(q, q) * 1.6);
+      o = vec4(col, 1.0);
+    }`;
+
+  function compile(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) + '\n' + src);
+    return s;
+  }
+  function program(vs, fs) {
+    const p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const uniforms = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); uniforms[info.name.replace(/\[0\]$/, '')] = gl.getUniformLocation(p, info.name); }
+    return { p, u: uniforms };
+  }
+
+  let progs;
+  try {
+    progs = {
+      seed: program(VS_FULL, FS_SEED),
+      update: program(VS_FULL, FS_UPDATE),
+      deposit: program(VS_DEPOSIT, FS_DEPOSIT),
+      diffuse: program(VS_FULL, FS_DIFFUSE),
+      glowDown: program(VS_FULL, FS_GLOW_DOWN),
+      blur: program(VS_FULL, FS_BLUR),
+      display: program(VS_FULL, FS_DISPLAY),
+    };
+  } catch (e) {
+    fail('シェーダーのコンパイルに失敗しました: ' + String(e.message).split('\n')[0]);
+    return;
+  }
+
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+
+  // ---------------------------------------------------------------------------
+  // Framebuffer helpers
+  // ---------------------------------------------------------------------------
+  function createTarget(w, h, fmt, filter) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, fmt.internal, w, h, 0, fmt.format, fmt.type, null);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (status !== gl.FRAMEBUFFER_COMPLETE) throw new Error('framebuffer incomplete: 0x' + status.toString(16));
+    gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    return { tex, fbo, w, h, dispose() { gl.deleteTexture(tex); gl.deleteFramebuffer(fbo); } };
+  }
+  function createPingPong(w, h, fmt, filter) {
+    const pp = { a: createTarget(w, h, fmt, filter), b: createTarget(w, h, fmt, filter), w, h,
+      swap() { const t = pp.a; pp.a = pp.b; pp.b = t; },
+      dispose() { pp.a.dispose(); pp.b.dispose(); } };
+    return pp;
+  }
+  function bindTex(unit, tex) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); }
+  function drawFull(target) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fbo : null);
+    gl.viewport(0, 0, target ? target.w : canvas.width, target ? target.h : canvas.height);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Resources: agents, trail, glow
+  // ---------------------------------------------------------------------------
+  let agents = null, agentTexW = 0, agentTexH = 0;
+  let trail = null, glowA = null, glowB = null;
+  let seedCounter = 1;
+
+  function allocAgents() {
+    if (agents) agents.dispose();
+    agentTexW = Math.min(1024, MAX_TEX);
+    agentTexH = Math.ceil(agentCount / agentTexW);
+    if (agentTexH > MAX_TEX) { agentTexH = MAX_TEX; agentCount = agentTexW * agentTexH; }
+    try {
+      agents = createPingPong(agentTexW, agentTexH, AGENT_FMT, gl.NEAREST);
+    } catch (e) {
+      fail('エージェント用テクスチャを作成できませんでした: ' + e.message);
+      throw e;
+    }
+    seedAgents(seedIndex);
+  }
+  function seedAgents(mode) {
+    const pr = progs.seed;
+    gl.useProgram(pr.p);
+    gl.uniform1ui(pr.u.u_seed, (seedCounter++ * 2654435761) >>> 0);
+    gl.uniform1i(pr.u.u_mode, mode);
+    gl.uniform1f(pr.u.u_aspect, trail ? trail.w / trail.h : canvas.width / Math.max(1, canvas.height));
+    gl.disable(gl.BLEND);
+    drawFull(agents.a);
+  }
+
+  function allocTrail() {
+    if (trail) trail.dispose();
+    if (glowA) { glowA.dispose(); glowB.dispose(); }
+    const scale = Math.min(1, TRAIL_MAX_SIZE / Math.max(canvas.width, canvas.height));
+    const w = Math.max(64, Math.round(canvas.width * scale));
+    const h = Math.max(64, Math.round(canvas.height * scale));
+    trail = createPingPong(w, h, TRAIL_FMT, gl.LINEAR);
+    const gw = Math.max(16, Math.round(w / 4)), gh = Math.max(16, Math.round(h / 4));
+    glowA = createTarget(gw, gh, TRAIL_FMT, gl.LINEAR);
+    glowB = createTarget(gw, gh, TRAIL_FMT, gl.LINEAR);
+  }
+  function clearTrail() {
+    gl.clearColor(0, 0, 0, 1);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, trail.a.fbo); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, trail.b.fbo); gl.clear(gl.COLOR_BUFFER_BIT);
+  }
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
+    const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+    if (w === canvas.width && h === canvas.height && trail) return;
+    canvas.width = w; canvas.height = h;
+    allocTrail();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Simulation step
+  // ---------------------------------------------------------------------------
+  const DEG = Math.PI / 180;
+  function step() {
+    frame = (frame + 1) >>> 0;
+    // 1. Agents sense the trail, turn, move (ping-pong).
+    let pr = progs.update;
+    gl.useProgram(pr.p);
+    bindTex(0, agents.a.tex); gl.uniform1i(pr.u.u_agents, 0);
+    bindTex(1, trail.a.tex);  gl.uniform1i(pr.u.u_trail, 1);
+    gl.uniform2f(pr.u.u_trailSize, trail.w, trail.h);
+    gl.uniform1f(pr.u.u_sa, params.sensorAngle * DEG);
+    gl.uniform1f(pr.u.u_sd, params.sensorDist);
+    gl.uniform1f(pr.u.u_ta, params.turnAngle * DEG);
+    gl.uniform1f(pr.u.u_step, params.stepSize);
+    gl.uniform1f(pr.u.u_aspect, trail.w / trail.h);
+    gl.uniform3f(pr.u.u_attr, attractor.x, attractor.y, attractor.active ? 6.0 : 0.0);
+    gl.uniform1ui(pr.u.u_frame, frame);
+    gl.disable(gl.BLEND);
+    drawFull(agents.b);
+    agents.swap();
+
+    // 2. Deposit: every agent adds to the trail map as an additive point.
+    pr = progs.deposit;
+    gl.useProgram(pr.p);
+    bindTex(0, agents.a.tex); gl.uniform1i(pr.u.u_agents, 0);
+    gl.uniform1i(pr.u.u_texW, agentTexW);
+    gl.uniform1f(pr.u.u_deposit, params.deposit);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, trail.a.fbo);
+    gl.viewport(0, 0, trail.w, trail.h);
+    gl.drawArrays(gl.POINTS, 0, agentCount);
+    gl.disable(gl.BLEND);
+
+    // 3. Diffuse (3x3 blur) + decay into the other trail buffer.
+    pr = progs.diffuse;
+    gl.useProgram(pr.p);
+    bindTex(0, trail.a.tex); gl.uniform1i(pr.u.u_trail, 0);
+    gl.uniform2f(pr.u.u_texel, 1 / trail.w, 1 / trail.h);
+    gl.uniform1f(pr.u.u_diffuse, params.diffuse);
+    gl.uniform1f(pr.u.u_decay, params.decay);
+    drawFull(trail.b);
+    trail.swap();
+  }
+
+  function render() {
+    // Glow: downsample (tonemapped) then separable blur.
+    let pr = progs.glowDown;
+    gl.useProgram(pr.p);
+    bindTex(0, trail.a.tex); gl.uniform1i(pr.u.u_trail, 0);
+    gl.uniform2f(pr.u.u_texel, 1 / trail.w, 1 / trail.h);
+    gl.uniform1f(pr.u.u_exposure, params.exposure);
+    drawFull(glowA);
+    pr = progs.blur;
+    gl.useProgram(pr.p);
+    bindTex(0, glowA.tex); gl.uniform1i(pr.u.u_tex, 0);
+    gl.uniform2f(pr.u.u_dir, 1 / glowA.w, 0);
+    drawFull(glowB);
+    bindTex(0, glowB.tex);
+    gl.uniform2f(pr.u.u_dir, 0, 1 / glowA.h);
+    drawFull(glowA);
+
+    pr = progs.display;
+    gl.useProgram(pr.p);
+    bindTex(0, trail.a.tex); gl.uniform1i(pr.u.u_trail, 0);
+    bindTex(1, glowA.tex);   gl.uniform1i(pr.u.u_glow, 1);
+    gl.uniform3fv(pr.u.u_ramp, rampArray);
+    gl.uniform1f(pr.u.u_exposure, params.exposure);
+    gl.uniform1f(pr.u.u_glowAmount, 0.55);
+    gl.uniform1f(pr.u.u_vignette, 0.5);
+    drawFull(null);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Palette helpers
+  // ---------------------------------------------------------------------------
+  let rampArray = new Float32Array(15);
+  function hexToRgb(h) { const n = parseInt(h.slice(1), 16); return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; }
+  function applyPalette(i) {
+    paletteIndex = (i + PALETTES.length) % PALETTES.length;
+    const pal = PALETTES[paletteIndex];
+    pal.stops.forEach((s, k) => rampArray.set(hexToRgb(s), k * 3));
+    document.getElementById('palette-name').textContent = pal.name;
+    document.getElementById('ramp').style.background = `linear-gradient(90deg, ${pal.stops.join(', ')})`;
+    selPalette.value = String(paletteIndex);
+  }
+  function applyPreset(i, quiet) {
+    presetIndex = (i + PRESETS.length) % PRESETS.length;
+    const p = PRESETS[presetIndex];
+    for (const k of Object.keys(params)) if (k in p) params[k] = p[k];
+    selPreset.value = String(presetIndex);
+    syncSliders();
+    if (!quiet) toast('Preset: ' + p.name);
+  }
+
+  // ---------------------------------------------------------------------------
+  // UI
+  // ---------------------------------------------------------------------------
+  const selPreset = document.getElementById('sel-preset');
+  const selPalette = document.getElementById('sel-palette');
+  const selAgents = document.getElementById('sel-agents');
+  const chkPaused = document.getElementById('chk-paused');
+  PRESETS.forEach((p, i) => selPreset.add(new Option(p.name, String(i))));
+  PALETTES.forEach((p, i) => selPalette.add(new Option(p.name, String(i))));
+  selPreset.addEventListener('change', () => applyPreset(parseInt(selPreset.value, 10), true));
+  selPalette.addEventListener('change', () => applyPalette(parseInt(selPalette.value, 10)));
+  selAgents.addEventListener('change', () => {
+    agentCount = parseInt(selAgents.value, 10);
+    try { allocAgents(); } catch (e) { return; }
+    clearTrail();
+    toast('Agents: ' + selAgents.options[selAgents.selectedIndex].text);
+  });
+  chkPaused.addEventListener('change', () => setPaused(chkPaused.checked));
+
+  const sliders = Array.from(document.querySelectorAll('input[type=range][data-key]'));
+  function fmt(v) { return v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(v < 1 ? 3 : 2).replace(/0+$/, '').replace(/\.$/, ''); }
+  function syncSliders() {
+    for (const s of sliders) { s.value = params[s.dataset.key]; s.parentElement.nextElementSibling.textContent = fmt(params[s.dataset.key]); }
+  }
+  for (const s of sliders) {
+    s.addEventListener('input', () => { params[s.dataset.key] = parseFloat(s.value); s.parentElement.nextElementSibling.textContent = fmt(params[s.dataset.key]); });
+  }
+
+  document.getElementById('collapse').addEventListener('click', (e) => {
+    ui.classList.toggle('collapsed');
+    e.currentTarget.textContent = ui.classList.contains('collapsed') ? '+' : '–';
+    e.currentTarget.setAttribute('aria-label', ui.classList.contains('collapsed') ? 'Expand panel' : 'Collapse panel');
+  });
+  document.querySelectorAll('.btn[data-action]').forEach((b) => b.addEventListener('click', () => action(b.dataset.action)));
+
+  let toastTimer = 0;
+  function toast(msg) {
+    toastEl.textContent = msg; toastEl.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1600);
+  }
+  function setPaused(v) { paused = v; chkPaused.checked = v; toast(v ? 'Paused' : 'Resumed'); }
+  function updateSeedLabel() { document.getElementById('seed-name').textContent = SEEDS[seedIndex]; }
+
+  function screenshot() {
+    render();
+    canvas.toBlob((blob) => {
+      if (!blob) { toast('Screenshot failed'); return; }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'physarum-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      toast('Screenshot saved');
+    }, 'image/png');
+  }
+
+  function action(name) {
+    switch (name) {
+      case 'scatter':
+        seedAgents(seedIndex);
+        toast('Scatter: ' + SEEDS[seedIndex]);
+        seedIndex = (seedIndex + 1) % SEEDS.length; updateSeedLabel();
+        break;
+      case 'clear': clearTrail(); toast('Trail cleared'); break;
+      case 'screenshot': screenshot(); break;
+      case 'palette': applyPalette(paletteIndex + 1); toast('Palette: ' + PALETTES[paletteIndex].name); break;
+      case 'preset': applyPreset(presetIndex + 1); break;
+      case 'hide': {
+        const hidden = ui.classList.toggle('hidden');
+        fpsEl.classList.toggle('hidden', hidden);
+        toast(hidden ? 'UI hidden — press H to show' : 'UI shown');
+        break;
+      }
+      case 'pause': setPaused(!paused); break;
+    }
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target;
+    const inField = t && t.closest && t.closest('input, select, button, textarea');
+    if (inField && (e.key === ' ' || e.key === 'Enter' || (t.tagName === 'SELECT' && e.key.length === 1))) return;
+    const map = { ' ': 'scatter', c: 'clear', s: 'screenshot', p: 'palette', n: 'preset', h: 'hide', Escape: 'pause' };
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (k in map) { e.preventDefault(); action(map[k]); }
+  });
+
+  // Pointer: press and hold to place a food source (attractor).
+  function setAttractor(e) {
+    const r = canvas.getBoundingClientRect();
+    attractor.x = (e.clientX - r.left) / r.width;
+    attractor.y = 1 - (e.clientY - r.top) / r.height;
+  }
+  canvas.addEventListener('pointerdown', (e) => { if (e.button !== 0 && e.pointerType === 'mouse') return; canvas.setPointerCapture(e.pointerId); attractor.active = true; setAttractor(e); });
+  canvas.addEventListener('pointermove', (e) => { if (attractor.active) setAttractor(e); });
+  const release = () => { attractor.active = false; };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  canvas.addEventListener('lostpointercapture', release);
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  let resizeTimer = 0;
+  window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 120); });
+
+  // ---------------------------------------------------------------------------
+  // Boot + main loop
+  // ---------------------------------------------------------------------------
+  try {
+    resize();
+    selAgents.value = String(agentCount);
+    allocAgents();
+    seedIndex = 1; updateSeedLabel();           // booted with Random; first Scatter press goes to "Ring"
+  } catch (e) {
+    if (document.getElementById('fallback').classList.contains('hidden')) fail('初期化に失敗しました: ' + e.message);
+    return;
+  }
+  applyPalette(0);
+  applyPreset(0, true);
+
+  let frames = 0, fpsLast = performance.now();
+  const fpsNum = fpsEl.querySelector('b');
+  function loop(now) {
+    if (!paused) step();
+    render();
+    frames++;
+    if (now - fpsLast >= 500) {
+      fpsNum.textContent = Math.round(frames * 1000 / (now - fpsLast));
+      frames = 0; fpsLast = now;
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
